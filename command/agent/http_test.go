@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -871,7 +872,8 @@ func TestHTTPServer_Limits_Error(t *testing.T) {
 // TestHTTPServer_Limits_OK asserts that all valid limits combinations
 // (tls/timeout/conns) work.
 func TestHTTPServer_Limits_OK(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
+
 	const (
 		cafile   = "../../helper/tlsutil/testdata/ca.pem"
 		foocert  = "../../helper/tlsutil/testdata/nomad-foo.pem"
@@ -886,62 +888,62 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 		assertTimeout bool
 		assertLimit   bool
 	}{
-		{
-			tls:           false,
-			timeout:       "5s",
-			limit:         nil,
-			assertTimeout: false,
-			assertLimit:   false,
-		},
+		//{
+		//	tls:           false,
+		//	timeout:       "5s",
+		//	limit:         nil,
+		//	assertTimeout: false,
+		//	assertLimit:   false,
+		//},
+		//{
+		//	tls:           true,
+		//	timeout:       "5s",
+		//	limit:         nil,
+		//	assertTimeout: true,
+		//	assertLimit:   false,
+		//},
+		//{
+		//	tls:           false,
+		//	timeout:       "0",
+		//	limit:         nil,
+		//	assertTimeout: false,
+		//	assertLimit:   false,
+		//},
+		//{
+		//	tls:           true,
+		//	timeout:       "0",
+		//	limit:         nil,
+		//	assertTimeout: false,
+		//	assertLimit:   false,
+		//},
+		//{
+		//	tls:           false,
+		//	timeout:       "0",
+		//	limit:         helper.IntToPtr(2),
+		//	assertTimeout: false,
+		//	assertLimit:   true,
+		//},
 		{
 			tls:           true,
-			timeout:       "5s",
-			limit:         nil,
-			assertTimeout: true,
-			assertLimit:   false,
-		},
-		{
-			tls:           false,
-			timeout:       "0",
-			limit:         nil,
-			assertTimeout: false,
-			assertLimit:   false,
-		},
-		{
-			tls:           true,
-			timeout:       "0",
-			limit:         nil,
-			assertTimeout: false,
-			assertLimit:   false,
-		},
-		{
-			tls:           false,
 			timeout:       "0",
 			limit:         helper.IntToPtr(2),
 			assertTimeout: false,
 			assertLimit:   true,
 		},
-		{
-			tls:           true,
-			timeout:       "0",
-			limit:         helper.IntToPtr(2),
-			assertTimeout: false,
-			assertLimit:   true,
-		},
-		{
-			tls:           false,
-			timeout:       "5s",
-			limit:         helper.IntToPtr(2),
-			assertTimeout: false,
-			assertLimit:   true,
-		},
-		{
-			tls:           true,
-			timeout:       "5s",
-			limit:         helper.IntToPtr(2),
-			assertTimeout: true,
-			assertLimit:   true,
-		},
+		//{
+		//	tls:           false,
+		//	timeout:       "5s",
+		//	limit:         helper.IntToPtr(2),
+		//	assertTimeout: false,
+		//	assertLimit:   true,
+		//},
+		//{
+		//	tls:           true,
+		//	timeout:       "5s",
+		//	limit:         helper.IntToPtr(2),
+		//	assertTimeout: true,
+		//	assertLimit:   true,
+		//},
 	}
 
 	assertTimeout := func(t *testing.T, a *TestAgent, assertTimeout bool, timeout string) {
@@ -1035,16 +1037,31 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 		}
 	}
 
-	assertLimit := func(t *testing.T, addr string, limit int) {
+	assertLimit := func(t *testing.T, addr string, limit int, timeout bool, useTLS bool) {
 		var err error
 
 		// Create limit connections
 		conns := make([]net.Conn, limit)
 		errCh := make(chan error, limit)
 		for i := range conns {
-			conns[i], err = net.DialTimeout("tcp", addr, 1*time.Second)
+			if useTLS {
+
+				cert, err := tls.LoadX509KeyPair(foocert, fookey)
+				require.NoError(t, err)
+
+				// ca file?
+				fmt.Println("conn uses tls:", i)
+				conns[i], err = tls.Dial("tcp", addr, &tls.Config{
+					Certificates:       []tls.Certificate{cert},
+					RootCAs:            nil, // meh
+					InsecureSkipVerify: true,
+				})
+				require.NoError(t, err)
+			} else {
+				fmt.Println("conn does not use tls:", i)
+				conns[i], err = net.DialTimeout("tcp", addr, 1*time.Second)
+			}
 			require.NoError(t, err)
-			defer conns[i].Close()
 
 			go func(i int) {
 				buf := []byte{0}
@@ -1068,21 +1085,36 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 
-		buf := []byte{0}
-		deadline := time.Now().Add(10 * time.Second)
-		conn.SetReadDeadline(deadline)
-		n, err := conn.Read(buf)
-		require.Zero(t, n)
+		// enough to fit
+		// https://github.com/hashicorp/go-connlimit/blob/master/connlimit.go#L18
+		buf := make([]byte, 128*1024)
 
-		// Soft-fail as following assertion helps with debugging
-		assert.Equal(t, io.EOF, err)
+		deadline := time.Now().Add(10 * time.Second)
+		_ = conn.SetReadDeadline(deadline)
+
+		n, err := conn.Read(buf)
+		// switch on expectation (zero bytes vs 429) ... which is what
+		// 429 kicks in on too many requests per IP
+		if timeout {
+			fmt.Printf("assert-timeout, buf: %s\n", buf)
+			require.Zero(t, n)
+			// Soft-fail as following assertion helps with debugging
+			assert.Equal(t, io.EOF, err)
+		} else {
+			fmt.Printf("no-assert-timeout, buf: %s\n", buf)
+			require.NotZero(t, n)
+			require.NoError(t, err)
+			require.Contains(t, string(buf), "429 Too Many Requests")
+
+			// assert con is closed?
+		}
 
 		// Assert existing connections are ok
 		require.Len(t, errCh, 0)
 
 		// Cleanup
 		for _, conn := range conns {
-			conn.Close()
+			_ = conn.Close()
 		}
 		for range conns {
 			err := <-errCh
@@ -1090,11 +1122,18 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 		}
 	}
 
+	limitStr := func(limit *int) string {
+		if limit == nil {
+			return "none"
+		}
+		return strconv.Itoa(*limit)
+	}
+
 	for i := range cases {
 		tc := cases[i]
-		name := fmt.Sprintf("%d-tls-%t-timeout-%s-limit-%v", i, tc.tls, tc.timeout, tc.limit)
+		name := fmt.Sprintf("%d-tls-%t-timeout-%s-limit-%v", i, tc.tls, tc.timeout, limitStr(tc.limit))
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+			// t.Parallel()
 
 			if tc.limit != nil && *tc.limit >= maxConns {
 				t.Fatalf("test fixture failure: cannot assert limit (%d) >= max (%d)", *tc.limit, maxConns)
@@ -1114,18 +1153,19 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 			})
 			defer s.Shutdown()
 
-			assertTimeout(t, s, tc.assertTimeout, tc.timeout)
+			// assertTimeout(t, s, tc.assertTimeout, tc.timeout)
+			_ = assertTimeout
 
 			if tc.assertLimit {
 				// There's a race between assertTimeout(false) closing
 				// its connection and the HTTP server noticing and
-				// untracking it. Since there's no way to coordiante
+				// untracking it. Since there's no way to coordinate
 				// when this occurs, sleeping is the only way to avoid
 				// asserting limits before the timed out connection is
 				// untracked.
 				time.Sleep(1 * time.Second)
 
-				assertLimit(t, s.Server.Addr, *tc.limit)
+				assertLimit(t, s.Server.Addr, *tc.limit, tc.assertTimeout, tc.tls)
 			} else {
 				assertNoLimit(t, s.Server.Addr)
 			}

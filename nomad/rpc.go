@@ -73,6 +73,7 @@ func newRpcHandler(s *Server) *rpcHandler {
 		gologger:  logger.StandardLoggerIntercept(&log.StandardLoggerOptions{InferLevels: true}),
 	}
 
+	fmt.Println("rh AAAA")
 	// Setup connection limits
 	if r.connLimit > 0 {
 		r.connLimiter = connlimit.NewLimiter(connlimit.Config{
@@ -137,6 +138,7 @@ func (r *rpcHandler) listen(ctx context.Context) {
 		if r.connLimiter != nil {
 			free, err := r.connLimiter.Accept(conn)
 			if err != nil {
+				fmt.Println("BBBBBBBBBBBBBB", err)
 				r.logger.Error("rejecting client for exceeding maximum RPC connections",
 					"remote_addr", conn.RemoteAddr(), "limit", r.connLimit)
 				conn.Close()

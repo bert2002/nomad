@@ -54,6 +54,7 @@ type Config struct {
 
 // NewLimiter returns a limiter with the specified config.
 func NewLimiter(cfg Config) *Limiter {
+	// hi
 	l := &Limiter{}
 	l.SetConfig(cfg)
 	return l
@@ -94,7 +95,9 @@ func (l *Limiter) Accept(conn net.Conn) (func(), error) {
 
 	// Might be greater since config is dynamic.
 	if cfg.MaxConnsPerClientIP > 0 && n >= cfg.MaxConnsPerClientIP {
-		return func() {}, ErrPerClientIPLimitReached
+		return func() {
+			fmt.Println("CCCCCCCCCCCC")
+		}, ErrPerClientIPLimitReached
 	}
 
 	// Add the conn to the map
@@ -190,17 +193,20 @@ func (l *Limiter) SetConfig(c Config) {
 // hijacked connections.
 // errorHandler MUST close the connection itself
 func (l *Limiter) HTTPConnStateFuncWithErrorHandler(errorHandler func(error, net.Conn)) func(net.Conn, http.ConnState) {
-
+	fmt.Println("Limiter.Handler")
 	return func(conn net.Conn, state http.ConnState) {
 		switch state {
 		case http.StateNew:
 			_, err := l.Accept(conn)
+			fmt.Println(" -> StateNew", err)
 			if err != nil {
 				errorHandler(err, conn)
 			}
 		case http.StateHijacked:
+			fmt.Println(" -> StateHijacked")
 			l.freeConn(conn)
 		case http.StateClosed:
+			fmt.Println(" -> StateClosed")
 			// Maybe free the conn. This might be a conn we closed in the case above
 			// that was never counted as it was over limit but freeConn will be a
 			// no-op in that case.
@@ -221,13 +227,17 @@ func (l *Limiter) HTTPConnStateFunc() func(net.Conn, http.ConnState) {
 // HTTPConnStateFuncWithErrorHandler if you want to use a non-blocking strategy.
 func (l *Limiter) HTTPConnStateFuncWithDefault429Handler(writeDeadlineMaxDelay time.Duration) func(net.Conn, http.ConnState) {
 	return l.HTTPConnStateFuncWithErrorHandler(func(err error, conn net.Conn) {
+		fmt.Println("X Handle, err:", err)
 		if err == ErrPerClientIPLimitReached {
 			// We don't care about slow players
 			if writeDeadlineMaxDelay > 0 {
 				conn.SetDeadline(time.Now().Add(writeDeadlineMaxDelay))
 			}
-			conn.Write(tooManyRequestsResponse)
+			fmt.Println(" -> write")
+			n, err := conn.Write(tooManyRequestsResponse)
+			fmt.Println(" -> write err:", n, err)
 		}
+		fmt.Println(" -> close")
 		conn.Close()
 	})
 }

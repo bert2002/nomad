@@ -170,9 +170,12 @@ func NewHTTPServer(agent *Agent, config *Config) (*HTTPServer, error) {
 // If limit > 0, a per-address connection limit will be enabled regardless of
 // TLS. If connLimit == 0 there is no connection limit.
 func makeConnState(isTLS bool, handshakeTimeout time.Duration, connLimit int) func(conn net.Conn, state http.ConnState) {
+	fmt.Println("isTLS:", isTLS, "handshakeTimeout:", handshakeTimeout)
+
 	if !isTLS || handshakeTimeout == 0 {
 		if connLimit > 0 {
 			// Still return the connection limiter
+			fmt.Println("mcs A")
 			return connlimit.NewLimiter(connlimit.Config{
 				MaxConnsPerClientIP: connLimit,
 			}).HTTPConnStateFuncWithDefault429Handler(HTTPConnStateFuncWriteTimeout)
@@ -189,6 +192,7 @@ func makeConnState(isTLS bool, handshakeTimeout time.Duration, connLimit int) fu
 			MaxConnsPerClientIP: connLimit,
 		}).HTTPConnStateFuncWithDefault429Handler(HTTPConnStateFuncWriteTimeout)
 
+		fmt.Println("mcs B")
 		return func(conn net.Conn, state http.ConnState) {
 			switch state {
 			case http.StateNew:
@@ -208,6 +212,7 @@ func makeConnState(isTLS bool, handshakeTimeout time.Duration, connLimit int) fu
 		}
 	}
 
+	fmt.Println("mcs C")
 	// Return conn state callback with just a handshake timeout
 	// (connection limiting disabled).
 	return func(conn net.Conn, state http.ConnState) {
